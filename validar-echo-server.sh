@@ -1,6 +1,6 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 
-set -euo pipefail
+set -eu
 
 NETWORK="tp0_testing_net"
 HOST="server"
@@ -9,7 +9,7 @@ MSG="ping-echo-test"
 
 OUT="$(docker run --rm --network "$NETWORK" alpine sh -c "echo '$MSG' | nc $HOST $PORT" || true)"
 
-if [[ "$OUT" == "$MSG" ]]; then
+if [ "$OUT" = "$MSG" ]; then
   echo "action: test_echo_server | result: success"
 else
   echo "action: test_echo_server | result: fail"
