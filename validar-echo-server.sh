@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-NETWORK="tp0_testing_ne"
+NETWORK="tp0_testing_net"
 HOST="server"
 PORT="12345"
 MSG="ping-echo-test"
