@@ -10,7 +10,7 @@ services:
     networks:
       - testing_net
     volumes:
-      - ./server/config.ini:/config.ini:ro
+      - ./server/config.ini:/config.ini
 
   client1:
     container_name: client1
@@ -24,7 +24,7 @@ services:
     depends_on:
       - server
     volumes:
-      - ./client/config.yaml:/config.yaml:ro
+      - ./client/config.yaml:/config.yaml
 
 networks:
   testing_net:
