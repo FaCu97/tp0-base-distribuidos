@@ -7,7 +7,7 @@ HOST="server"
 PORT="12345"
 MSG="ping-echo-test"
 
-OUT="$(docker run --rm --network "$NETWORK" busybox sh -c "echo '$MSG' | nc $HOST $PORT" || true)"
+OUT="$(docker run --rm --network "$NETWORK" alpine sh -c "echo '$MSG' | nc $HOST $PORT" || true)"
 
 if [[ "$OUT" == "$MSG" ]]; then
   echo "action: test_echo_server | result: success"
