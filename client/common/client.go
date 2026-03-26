@@ -21,7 +21,9 @@ const (
 	birthFieldSize    = 10
 	numberFieldSize   = 4
 	betFrameSize      = nameFieldSize + surnameFieldSize + documentFieldSize + birthFieldSize + numberFieldSize
+	batchCountSize    = 2
 	ackFrameSize      = 2
+	maxBatchBytes     = 8 * 1024
 )
 
 type Bet struct {
@@ -34,11 +36,11 @@ type Bet struct {
 
 // ClientConfig Configuration used by the client
 type ClientConfig struct {
-	ID            string
-	ServerAddress string
-	LoopAmount    int
-	LoopPeriod    time.Duration
-	Bet           Bet
+	ID             string
+	ServerAddress  string
+	LoopPeriod     time.Duration
+	Bets           []Bet
+	BatchMaxAmount int
 }
 
 // Client Entity that encapsulates how
@@ -91,45 +93,68 @@ func (c *Client) GracefulShutdown() {
 
 // StartClientLoop Send messages to the client until some time threshold is met
 func (c *Client) StartClientLoop() {
+	if len(c.config.Bets) == 0 {
+		log.Infof("action: loop_finished | result: success | client_id: %v | reason: no_bets", c.config.ID)
+		return
+	}
+
 	if c.isShuttingDown() {
 		log.Infof("action: loop_finished | result: success | client_id: %v | reason: shutdown", c.config.ID)
 		return
 	}
 
-	if err := c.createClientSocket(); err != nil {
-		return
-	}
+	batchSize := c.effectiveBatchSize()
+	batches := splitBets(c.config.Bets, batchSize)
 
-	conn := c.getConn()
-	if conn == nil {
-		log.Errorf("action: send_message | result: fail | client_id: %v | error: connection_closed", c.config.ID)
-		return
-	}
-
-	if err := c.sendBetFrame(conn); err != nil {
-		log.Errorf("action: send_message | result: fail | client_id: %v | error: %v", c.config.ID, err)
-		c.closeClientSocket()
-		return
-	}
-
-	ack, err := c.readAck(conn)
-	c.closeClientSocket()
-	if err != nil {
+	for idx, batch := range batches {
 		if c.isShuttingDown() {
-			log.Infof("action: receive_message | result: success | client_id: %v | reason: shutdown", c.config.ID)
+			log.Infof("action: loop_finished | result: success | client_id: %v | reason: shutdown", c.config.ID)
 			return
 		}
 
-		log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v", c.config.ID, err)
-		return
+		if err := c.createClientSocket(); err != nil {
+			return
+		}
+
+		conn := c.getConn()
+		if conn == nil {
+			log.Errorf("action: send_message | result: fail | client_id: %v | error: connection_closed", c.config.ID)
+			return
+		}
+
+		if err := c.sendBatchFrame(conn, batch); err != nil {
+			log.Errorf("action: send_message | result: fail | client_id: %v | error: %v", c.config.ID, err)
+			c.closeClientSocket()
+			return
+		}
+
+		ack, err := c.readAck(conn)
+		c.closeClientSocket()
+		if err != nil {
+			if c.isShuttingDown() {
+				log.Infof("action: receive_message | result: success | client_id: %v | reason: shutdown", c.config.ID)
+				return
+			}
+
+			log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v", c.config.ID, err)
+			return
+		}
+
+		if ack != "OK" {
+			log.Errorf("action: receive_message | result: fail | client_id: %v | error: invalid_ack", c.config.ID)
+			return
+		}
+
+		for _, bet := range batch {
+			log.Infof("action: apuesta_enviada | result: success | dni: %s | numero: %d", bet.Documento, bet.Numero)
+		}
+
+		if idx < len(batches)-1 && c.waitLoopPeriod() {
+			log.Infof("action: loop_finished | result: success | client_id: %v | reason: shutdown", c.config.ID)
+			return
+		}
 	}
 
-	if ack != "OK" {
-		log.Errorf("action: receive_message | result: fail | client_id: %v | error: invalid_ack", c.config.ID)
-		return
-	}
-
-	log.Infof("action: apuesta_enviada | result: success | dni: %s | numero: %d", c.config.Bet.Documento, c.config.Bet.Numero)
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
 
@@ -178,8 +203,16 @@ func (c *Client) closeClientSocket() {
 	log.Infof("action: close_resource | result: success | resource: client_socket | client_id: %v", c.config.ID)
 }
 
-func (c *Client) sendBetFrame(conn net.Conn) error {
-	frame, err := buildBetFrame(c.config.Bet)
+func (c *Client) sendBatchFrame(conn net.Conn, batch []Bet) error {
+	if len(batch) == 0 {
+		return fmt.Errorf("empty batch")
+	}
+
+	if len(batch) > 0xFFFF {
+		return fmt.Errorf("batch size exceeds uint16 limit")
+	}
+
+	frame, err := buildBatchFrame(batch)
 	if err != nil {
 		return err
 	}
@@ -197,6 +230,65 @@ func (c *Client) sendBetFrame(conn net.Conn) error {
 	}
 
 	return nil
+}
+
+func buildBatchFrame(batch []Bet) ([]byte, error) {
+	payloadSize := len(batch) * betFrameSize
+	totalSize := batchCountSize + payloadSize
+	if totalSize > maxBatchBytes {
+		return nil, fmt.Errorf("batch frame exceeds %d bytes", maxBatchBytes)
+	}
+
+	frame := make([]byte, totalSize)
+	binary.BigEndian.PutUint16(frame[:batchCountSize], uint16(len(batch)))
+	offset := batchCountSize
+
+	for _, bet := range batch {
+		betFrame, err := buildBetFrame(bet)
+		if err != nil {
+			return nil, err
+		}
+
+		copy(frame[offset:offset+betFrameSize], betFrame)
+		offset += betFrameSize
+	}
+
+	return frame, nil
+}
+
+func splitBets(bets []Bet, batchSize int) [][]Bet {
+	if batchSize <= 0 {
+		batchSize = 1
+	}
+
+	batches := make([][]Bet, 0, (len(bets)+batchSize-1)/batchSize)
+	for start := 0; start < len(bets); start += batchSize {
+		end := start + batchSize
+		if end > len(bets) {
+			end = len(bets)
+		}
+		batches = append(batches, bets[start:end])
+	}
+
+	return batches
+}
+
+func (c *Client) effectiveBatchSize() int {
+	maxByBytes := (maxBatchBytes - batchCountSize) / betFrameSize
+	if maxByBytes <= 0 {
+		return 1
+	}
+
+	configured := c.config.BatchMaxAmount
+	if configured <= 0 {
+		configured = maxByBytes
+	}
+
+	if configured > maxByBytes {
+		configured = maxByBytes
+	}
+
+	return configured
 }
 
 func (c *Client) readAck(conn net.Conn) (string, error) {

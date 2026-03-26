@@ -1,10 +1,11 @@
 package main
 
 import (
+	"encoding/csv"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/7574-sistemas-distribuidos/docker-compose-init/client/common"
+	"github.com/7574-sistemas-distribuidos/docker-compose-init/client/domain"
 )
 
 var log = logging.MustGetLogger("log")
@@ -40,11 +42,7 @@ func InitConfig() (*viper.Viper, error) {
 	v.BindEnv("loop", "period")
 	v.BindEnv("loop", "amount")
 	v.BindEnv("log", "level")
-	v.BindEnv("bet.nombre", "NOMBRE")
-	v.BindEnv("bet.apellido", "APELLIDO")
-	v.BindEnv("bet.documento", "DOCUMENTO")
-	v.BindEnv("bet.nacimiento", "NACIMIENTO")
-	v.BindEnv("bet.numero", "NUMERO")
+	v.BindEnv("batch", "maxAmount")
 
 	// Try to read configuration from config file. If config file
 	// does not exists then ReadInConfig will fail but configuration
@@ -98,6 +96,46 @@ func PrintConfig(v *viper.Viper) {
 	)
 }
 
+func LoadBetsFromCSV(filename string) ([]domain.Bet, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("error al abrir el archivo: %w", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	bets := make([]domain.Bet, 0)
+	lineNumber := 0
+
+	for {
+		record, err := reader.Read()
+		lineNumber++
+
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Warningf("action: load_bet | result: fail | line: %d | error: %v", lineNumber, err)
+			continue
+		}
+
+		bet, parseErr := domain.NewBetFromCSV(record)
+		if parseErr != nil {
+			log.Warningf("action: load_bet | result: fail | line: %d | error: %v", lineNumber, parseErr)
+			continue
+		}
+
+		bets = append(bets, bet)
+	}
+
+	if len(bets) == 0 {
+		return nil, fmt.Errorf("no hay apuestas validas en %s", filename)
+	}
+
+	log.Infof("action: load_bets | result: success | file: %s | amount: %d", filename, len(bets))
+	return bets, nil
+}
+
 func main() {
 	v, err := InitConfig()
 	if err != nil {
@@ -111,27 +149,28 @@ func main() {
 	// Print program config with debugging purposes
 	PrintConfig(v)
 
-	numero, err := strconv.Atoi(v.GetString("bet.numero"))
+	bets, err := LoadBetsFromCSV("agency.csv")
 	if err != nil {
-		log.Criticalf("invalid NUMERO value: %s", err)
+		log.Criticalf("%s", err)
 	}
 
-	if numero < 0 {
-		log.Criticalf("NUMERO must be greater than or equal to 0")
+	commonBets := make([]common.Bet, 0, len(bets))
+	for _, bet := range bets {
+		commonBets = append(commonBets, common.Bet{
+			Nombre:     bet.Nombre,
+			Apellido:   bet.Apellido,
+			Documento:  bet.Documento,
+			Nacimiento: bet.Nacimiento,
+			Numero:     uint32(bet.Numero),
+		})
 	}
 
 	clientConfig := common.ClientConfig{
-		ServerAddress: v.GetString("server.address"),
-		ID:            v.GetString("id"),
-		LoopAmount:    v.GetInt("loop.amount"),
-		LoopPeriod:    v.GetDuration("loop.period"),
-		Bet: common.Bet{
-			Nombre:     v.GetString("bet.nombre"),
-			Apellido:   v.GetString("bet.apellido"),
-			Documento:  v.GetString("bet.documento"),
-			Nacimiento: v.GetString("bet.nacimiento"),
-			Numero:     uint32(numero),
-		},
+		ServerAddress:  v.GetString("server.address"),
+		ID:             v.GetString("id"),
+		LoopPeriod:     v.GetDuration("loop.period"),
+		Bets:           commonBets,
+		BatchMaxAmount: v.GetInt("batch.maxAmount"),
 	}
 
 	client := common.NewClient(clientConfig)

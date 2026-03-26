@@ -10,6 +10,7 @@ SURNAME_FIELD_SIZE = 30
 DOCUMENT_FIELD_SIZE = 8
 BIRTH_FIELD_SIZE = 10
 NUMBER_FIELD_SIZE = 4
+BET_COUNT_SIZE = 2
 BET_FRAME_SIZE = (
     NAME_FIELD_SIZE
     + SURNAME_FIELD_SIZE
@@ -17,6 +18,7 @@ BET_FRAME_SIZE = (
     + BIRTH_FIELD_SIZE
     + NUMBER_FIELD_SIZE
 )
+MAX_BATCH_BYTES = 8 * 1024
 ACK_OK = b"OK"
 ACK_ERR = b"ER"
 
@@ -65,32 +67,34 @@ class Server:
         """
         try:
             addr = client_sock.getpeername()
-            payload = self.__read_exact(client_sock, BET_FRAME_SIZE)
-            bet = self.__decode_bet_frame(payload)
+            bet_count = self.__read_bet_count(client_sock)
+            payload = self.__read_batch_payload(client_sock, bet_count)
+            decoded_bets = self.__decode_batch(payload, bet_count)
 
             agency = self.__infer_agency_from_client_socket(addr)
-            store_bets([
-                Bet(
-                    agency,
-                    bet['nombre'],
-                    bet['apellido'],
-                    bet['documento'],
-                    bet['nacimiento'],
-                    str(bet['numero']),
+            to_store = []
+            for bet in decoded_bets:
+                to_store.append(
+                    Bet(
+                        agency,
+                        bet['nombre'],
+                        bet['apellido'],
+                        bet['documento'],
+                        bet['nacimiento'],
+                        str(bet['numero']),
+                    )
                 )
-            ])
+            store_bets(to_store)
 
-            logging.info(
-                'action: apuesta_almacenada | result: success | dni: %s | numero: %s',
-                bet['documento'],
-                bet['numero'],
-            )
+            logging.info('action: apuesta_recibida | result: success | cantidad: %s', bet_count)
             self.__send_ack(client_sock, ACK_OK)
         except OSError as e:
             logging.error('action: receive_message | result: fail | error: %s', e)
             self.__safe_send_error_ack(client_sock)
         except ValueError as e:
             logging.error('action: receive_message | result: fail | error: %s', e)
+            if 'bet_count' in locals():
+                logging.info('action: apuesta_recibida | result: fail | cantidad: %s', bet_count)
             self.__safe_send_error_ack(client_sock)
         finally:
             self._active_client_sockets.discard(client_sock)
@@ -150,6 +154,21 @@ class Server:
     def __send_ack(self, client_sock, ack):
         client_sock.sendall(ack)
 
+    def __read_bet_count(self, client_sock):
+        raw_count = self.__read_exact(client_sock, BET_COUNT_SIZE)
+        bet_count = int.from_bytes(raw_count, byteorder='big', signed=False)
+        if bet_count <= 0:
+            raise ValueError('bet_count must be greater than zero')
+        return bet_count
+
+    def __read_batch_payload(self, client_sock, bet_count):
+        payload_size = bet_count * BET_FRAME_SIZE
+        total_size = BET_COUNT_SIZE + payload_size
+        if total_size > MAX_BATCH_BYTES:
+            raise ValueError('batch payload exceeds 8kB limit')
+
+        return self.__read_exact(client_sock, payload_size)
+
     def __safe_send_error_ack(self, client_sock):
         try:
             self.__send_ack(client_sock, ACK_ERR)
@@ -187,6 +206,20 @@ class Server:
             'nacimiento': nacimiento,
             'numero': numero,
         }
+
+    def __decode_batch(self, payload, bet_count):
+        expected_size = bet_count * BET_FRAME_SIZE
+        if len(payload) != expected_size:
+            raise ValueError('invalid batch payload size')
+
+        bets = []
+        offset = 0
+        for _ in range(bet_count):
+            frame = payload[offset:offset + BET_FRAME_SIZE]
+            bets.append(self.__decode_bet_frame(frame))
+            offset += BET_FRAME_SIZE
+
+        return bets
 
     def __infer_agency_from_client_socket(self, addr):
         _ = addr

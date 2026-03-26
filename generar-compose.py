@@ -23,17 +23,13 @@ services:
     entrypoint: /client
     environment:
       - CLI_ID={i}
-      - NOMBRE=JUAN
-      - APELLIDO=PEREZ
-      - DOCUMENTO=11111111
-      - NACIMIENTO=1997-02-12
-      - NUMERO=1234
     networks:
       - testing_net
     depends_on:
       - server
     volumes:
       - ./client/config.yaml:/config.yaml
+      - ./.data/agency-{i}.csv:/agency.csv
 """
         compose += client_block
 
