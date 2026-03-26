@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -39,6 +40,11 @@ func InitConfig() (*viper.Viper, error) {
 	v.BindEnv("loop", "period")
 	v.BindEnv("loop", "amount")
 	v.BindEnv("log", "level")
+	v.BindEnv("bet.nombre", "NOMBRE")
+	v.BindEnv("bet.apellido", "APELLIDO")
+	v.BindEnv("bet.documento", "DOCUMENTO")
+	v.BindEnv("bet.nacimiento", "NACIMIENTO")
+	v.BindEnv("bet.numero", "NUMERO")
 
 	// Try to read configuration from config file. If config file
 	// does not exists then ReadInConfig will fail but configuration
@@ -105,11 +111,27 @@ func main() {
 	// Print program config with debugging purposes
 	PrintConfig(v)
 
+	numero, err := strconv.Atoi(v.GetString("bet.numero"))
+	if err != nil {
+		log.Criticalf("invalid NUMERO value: %s", err)
+	}
+
+	if numero < 0 {
+		log.Criticalf("NUMERO must be greater than or equal to 0")
+	}
+
 	clientConfig := common.ClientConfig{
 		ServerAddress: v.GetString("server.address"),
 		ID:            v.GetString("id"),
 		LoopAmount:    v.GetInt("loop.amount"),
 		LoopPeriod:    v.GetDuration("loop.period"),
+		Bet: common.Bet{
+			Nombre:     v.GetString("bet.nombre"),
+			Apellido:   v.GetString("bet.apellido"),
+			Documento:  v.GetString("bet.documento"),
+			Nacimiento: v.GetString("bet.nacimiento"),
+			Numero:     uint32(numero),
+		},
 	}
 
 	client := common.NewClient(clientConfig)

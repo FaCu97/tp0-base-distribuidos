@@ -1,5 +1,24 @@
 import socket
 import logging
+import datetime
+
+from common.utils import Bet, store_bets
+
+
+NAME_FIELD_SIZE = 30
+SURNAME_FIELD_SIZE = 30
+DOCUMENT_FIELD_SIZE = 8
+BIRTH_FIELD_SIZE = 10
+NUMBER_FIELD_SIZE = 4
+BET_FRAME_SIZE = (
+    NAME_FIELD_SIZE
+    + SURNAME_FIELD_SIZE
+    + DOCUMENT_FIELD_SIZE
+    + BIRTH_FIELD_SIZE
+    + NUMBER_FIELD_SIZE
+)
+ACK_OK = b"OK"
+ACK_ERR = b"ER"
 
 
 class Server:
@@ -45,14 +64,34 @@ class Server:
         client socket will also be closed
         """
         try:
-            # TODO: Modify the receive to avoid short-reads
-            msg = client_sock.recv(1024).rstrip().decode('utf-8')
             addr = client_sock.getpeername()
-            logging.info(f'action: receive_message | result: success | ip: {addr[0]} | msg: {msg}')
-            # TODO: Modify the send to avoid short-writes
-            client_sock.send("{}\n".format(msg).encode('utf-8'))
+            payload = self.__read_exact(client_sock, BET_FRAME_SIZE)
+            bet = self.__decode_bet_frame(payload)
+
+            agency = self.__infer_agency_from_client_socket(addr)
+            store_bets([
+                Bet(
+                    agency,
+                    bet['nombre'],
+                    bet['apellido'],
+                    bet['documento'],
+                    bet['nacimiento'],
+                    str(bet['numero']),
+                )
+            ])
+
+            logging.info(
+                'action: apuesta_almacenada | result: success | dni: %s | numero: %s',
+                bet['documento'],
+                bet['numero'],
+            )
+            self.__send_ack(client_sock, ACK_OK)
         except OSError as e:
-            logging.error("action: receive_message | result: fail | error: {e}")
+            logging.error('action: receive_message | result: fail | error: %s', e)
+            self.__safe_send_error_ack(client_sock)
+        except ValueError as e:
+            logging.error('action: receive_message | result: fail | error: %s', e)
+            self.__safe_send_error_ack(client_sock)
         finally:
             self._active_client_sockets.discard(client_sock)
             self.__close_socket(client_sock, 'client_socket')
@@ -69,11 +108,11 @@ class Server:
         logging.info('action: accept_connections | result: in_progress')
         try:
             c, addr = self._server_socket.accept()
-            logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
+            logging.info('action: accept_connections | result: success | ip: %s', addr[0])
             return c
         except OSError as e:
             if self._is_shutting_down:
-                logging.info('action: accept_connections | result: fail')
+                logging.info('action: accept_connections | result: success | reason: interrupted_by_shutdown')
                 return None
 
             logging.error('action: accept_connections | result: fail | error: %s', e)
@@ -97,3 +136,58 @@ class Server:
         for client_sock in list(self._active_client_sockets):
             self.__close_socket(client_sock, 'client_socket')
             self._active_client_sockets.discard(client_sock)
+
+    def __read_exact(self, client_sock, size):
+        data = bytearray()
+        while len(data) < size:
+            chunk = client_sock.recv(size - len(data))
+            if not chunk:
+                raise OSError('connection closed before full frame reception')
+            data.extend(chunk)
+
+        return bytes(data)
+
+    def __send_ack(self, client_sock, ack):
+        client_sock.sendall(ack)
+
+    def __safe_send_error_ack(self, client_sock):
+        try:
+            self.__send_ack(client_sock, ACK_ERR)
+        except OSError:
+            pass
+
+    def __decode_bet_frame(self, frame):
+        if len(frame) != BET_FRAME_SIZE:
+            raise ValueError('invalid bet frame size')
+
+        offset = 0
+        nombre = frame[offset:offset + NAME_FIELD_SIZE].decode('utf-8').rstrip(' ')
+        offset += NAME_FIELD_SIZE
+
+        apellido = frame[offset:offset + SURNAME_FIELD_SIZE].decode('utf-8').rstrip(' ')
+        offset += SURNAME_FIELD_SIZE
+
+        documento = frame[offset:offset + DOCUMENT_FIELD_SIZE].decode('utf-8')
+        offset += DOCUMENT_FIELD_SIZE
+
+        nacimiento = frame[offset:offset + BIRTH_FIELD_SIZE].decode('utf-8')
+        offset += BIRTH_FIELD_SIZE
+
+        numero = int.from_bytes(frame[offset:offset + NUMBER_FIELD_SIZE], byteorder='big', signed=False)
+
+        if not documento.isdigit():
+            raise ValueError('documento must contain only digits')
+
+        datetime.date.fromisoformat(nacimiento)
+
+        return {
+            'nombre': nombre,
+            'apellido': apellido,
+            'documento': documento,
+            'nacimiento': nacimiento,
+            'numero': numero,
+        }
+
+    def __infer_agency_from_client_socket(self, addr):
+        _ = addr
+        return '0'

@@ -1,9 +1,11 @@
 package common
 
 import (
-	"bufio"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,12 +14,31 @@ import (
 
 var log = logging.MustGetLogger("log")
 
+const (
+	nameFieldSize     = 30
+	surnameFieldSize  = 30
+	documentFieldSize = 8
+	birthFieldSize    = 10
+	numberFieldSize   = 4
+	betFrameSize      = nameFieldSize + surnameFieldSize + documentFieldSize + birthFieldSize + numberFieldSize
+	ackFrameSize      = 2
+)
+
+type Bet struct {
+	Nombre     string
+	Apellido   string
+	Documento  string
+	Nacimiento string
+	Numero     uint32
+}
+
 // ClientConfig Configuration used by the client
 type ClientConfig struct {
 	ID            string
 	ServerAddress string
 	LoopAmount    int
 	LoopPeriod    time.Duration
+	Bet           Bet
 }
 
 // Client Entity that encapsulates how
@@ -70,65 +91,45 @@ func (c *Client) GracefulShutdown() {
 
 // StartClientLoop Send messages to the client until some time threshold is met
 func (c *Client) StartClientLoop() {
-	// There is an autoincremental msgID to identify every message sent
-	// Messages if the message amount threshold has not been surpassed
-	for msgID := 1; msgID <= c.config.LoopAmount; msgID++ {
-		if c.isShuttingDown() {
-			log.Infof("action: loop_finished | result: success | client_id: %v | reason: shutdown", c.config.ID)
-			return
-		}
-
-		// Create the connection the server in every loop iteration. Send an
-		if err := c.createClientSocket(); err != nil {
-			return
-		}
-
-		// TODO: Modify the send to avoid short-write
-		conn := c.getConn()
-		if conn == nil {
-			log.Errorf("action: send_message | result: fail | client_id: %v | error: connection_closed", c.config.ID)
-			return
-		}
-
-		if _, err := fmt.Fprintf(
-			conn,
-			"[CLIENT %v] Message N°%v\n",
-			c.config.ID,
-			msgID,
-		); err != nil {
-			log.Errorf("action: send_message | result: fail | client_id: %v | error: %v", c.config.ID, err)
-			c.closeClientSocket()
-			return
-		}
-
-		msg, err := bufio.NewReader(conn).ReadString('\n')
-		c.closeClientSocket()
-
-		if err != nil {
-			if c.isShuttingDown() {
-				log.Infof("action: receive_message | result: success | client_id: %v | reason: shutdown", c.config.ID)
-				return
-			}
-
-			log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v",
-				c.config.ID,
-				err,
-			)
-			return
-		}
-
-		log.Infof("action: receive_message | result: success | client_id: %v | msg: %v",
-			c.config.ID,
-			msg,
-		)
-
-		// Wait a time between sending one message and the next one
-		if c.waitLoopPeriod() {
-			log.Infof("action: loop_finished | result: success | client_id: %v | reason: shutdown", c.config.ID)
-			return
-		}
-
+	if c.isShuttingDown() {
+		log.Infof("action: loop_finished | result: success | client_id: %v | reason: shutdown", c.config.ID)
+		return
 	}
+
+	if err := c.createClientSocket(); err != nil {
+		return
+	}
+
+	conn := c.getConn()
+	if conn == nil {
+		log.Errorf("action: send_message | result: fail | client_id: %v | error: connection_closed", c.config.ID)
+		return
+	}
+
+	if err := c.sendBetFrame(conn); err != nil {
+		log.Errorf("action: send_message | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		c.closeClientSocket()
+		return
+	}
+
+	ack, err := c.readAck(conn)
+	c.closeClientSocket()
+	if err != nil {
+		if c.isShuttingDown() {
+			log.Infof("action: receive_message | result: success | client_id: %v | reason: shutdown", c.config.ID)
+			return
+		}
+
+		log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
+	}
+
+	if ack != "OK" {
+		log.Errorf("action: receive_message | result: fail | client_id: %v | error: invalid_ack", c.config.ID)
+		return
+	}
+
+	log.Infof("action: apuesta_enviada | result: success | dni: %s | numero: %d", c.config.Bet.Documento, c.config.Bet.Numero)
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
 
@@ -175,4 +176,95 @@ func (c *Client) closeClientSocket() {
 	}
 
 	log.Infof("action: close_resource | result: success | resource: client_socket | client_id: %v", c.config.ID)
+}
+
+func (c *Client) sendBetFrame(conn net.Conn) error {
+	frame, err := buildBetFrame(c.config.Bet)
+	if err != nil {
+		return err
+	}
+
+	totalWritten := 0
+	for totalWritten < len(frame) {
+		n, writeErr := conn.Write(frame[totalWritten:])
+		if writeErr != nil {
+			return writeErr
+		}
+		if n == 0 {
+			return fmt.Errorf("short write detected")
+		}
+		totalWritten += n
+	}
+
+	return nil
+}
+
+func (c *Client) readAck(conn net.Conn) (string, error) {
+	ack := make([]byte, ackFrameSize)
+	if _, err := io.ReadFull(conn, ack); err != nil {
+		return "", err
+	}
+
+	return string(ack), nil
+}
+
+func buildBetFrame(bet Bet) ([]byte, error) {
+	if len(bet.Documento) > documentFieldSize {
+		return nil, fmt.Errorf("documento exceeds %d bytes", documentFieldSize)
+	}
+
+	if len(bet.Nacimiento) != birthFieldSize {
+		return nil, fmt.Errorf("nacimiento must have format AAAA-MM-DD")
+	}
+
+	frame := make([]byte, betFrameSize)
+	offset := 0
+
+	copy(frame[offset:offset+nameFieldSize], formatRightPaddedField(bet.Nombre, nameFieldSize))
+	offset += nameFieldSize
+
+	copy(frame[offset:offset+surnameFieldSize], formatRightPaddedField(bet.Apellido, surnameFieldSize))
+	offset += surnameFieldSize
+
+	copy(frame[offset:offset+documentFieldSize], formatLeftZeroPaddedField(bet.Documento, documentFieldSize))
+	offset += documentFieldSize
+
+	copy(frame[offset:offset+birthFieldSize], []byte(bet.Nacimiento))
+	offset += birthFieldSize
+
+	binary.BigEndian.PutUint32(frame[offset:offset+numberFieldSize], bet.Numero)
+
+	return frame, nil
+}
+
+func formatRightPaddedField(value string, width int) []byte {
+	trimmed := strings.TrimSpace(value)
+	field := make([]byte, width)
+	for i := range field {
+		field[i] = ' '
+	}
+
+	raw := []byte(trimmed)
+	if len(raw) > width {
+		raw = raw[:width]
+	}
+
+	copy(field, raw)
+	return field
+}
+
+func formatLeftZeroPaddedField(value string, width int) []byte {
+	trimmed := strings.TrimSpace(value)
+	raw := []byte(trimmed)
+	if len(raw) > width {
+		raw = raw[len(raw)-width:]
+	}
+
+	field := make([]byte, width)
+	for i := range field {
+		field[i] = '0'
+	}
+
+	copy(field[width-len(raw):], raw)
+	return field
 }

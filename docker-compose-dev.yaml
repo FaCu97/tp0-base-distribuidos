@@ -19,6 +19,11 @@ services:
     environment:
       - CLI_ID=1
       - CLI_LOG_LEVEL=DEBUG
+      - NOMBRE=JUAN
+      - APELLIDO=PEREZ
+      - DOCUMENTO=11111111
+      - NACIMIENTO=1997-02-12
+      - NUMERO=1234
     networks:
       - testing_net
     depends_on:
