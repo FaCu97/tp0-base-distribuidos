@@ -179,3 +179,22 @@ Se proveen [pruebas automáticas](https://github.com/7574-sistemas-distribuidos/
 
 El incumplimiento de las pruebas es condición de desaprobación, pero su cumplimiento no es suficiente para la aprobación.  Se pide a los alumnos leer atentamente y **tener en cuenta** los criterios de corrección informados  [en el campus](https://campusgrado.fi.uba.ar/mod/page/view.php?id=73393).
 Respetar el formato y contenido las entradas de logs descritas en los ejercicios, pues son las que se chequean en cada uno de los tests.
+
+
+## IMPLEMENTACION
+
+### Ejercicio 5
+Protocolo:
+Frame de Apuesta 82 bytes fijos
+
+Estructura binaria:
+
+NOMBRE: 30 bytes (texto UTF-8, right-padded con espacios)
+APELLIDO: 30 bytes (texto UTF-8, right-padded con espacios)
+DOCUMENTO: 8 bytes (solo dígitos, left-padded con ceros)
+NACIMIENTO: 10 bytes (formato AAAA-MM-DD)
+NUMERO: 4 bytes (uint32 big-endian, rango 0-9999)
+Total: 30 + 30 + 8 + 10 + 4 = 82 bytes.
+
+ACK de Respuesta: 2 bytes
+OK / ER
