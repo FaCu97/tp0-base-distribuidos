@@ -198,3 +198,18 @@ Total: 30 + 30 + 8 + 10 + 4 = 82 bytes.
 
 ACK de Respuesta: 2 bytes
 OK / ER
+
+### Ejercicio 6
+Se agrego envio por batch.
+
+Se separo el dominio de la apuesta en cliente y se cambio la carga para leer apuestas desde CSV.
+El cliente valida cada fila, omite las invalidas y envia solo las validas.
+
+Protocolo de batch:
+- Header: 2 bytes con la cantidad de apuestas (uint16 big-endian).
+- Payload: N apuestas consecutivas, cada una de 82 bytes.
+- Tamaño maximo por paquete: 8 kB.
+
+El servidor procesa el batch completo y responde un solo ACK:
+- OK si todas las apuestas se pudieron procesar.
+- ER si falla al menos una.
