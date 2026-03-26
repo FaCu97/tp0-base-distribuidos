@@ -73,7 +73,7 @@ class Server:
             return c
         except OSError as e:
             if self._is_shutting_down:
-                logging.info('action: accept_connections | result: interrupted_by_shutdown')
+                logging.info('action: accept_connections | result: fail')
                 return None
 
             logging.error('action: accept_connections | result: fail | error: %s', e)

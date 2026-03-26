@@ -10,7 +10,7 @@ import sys
 def build_graceful_shutdown_handler(server):
     def graceful_shutdown(signum, frame):
         _ = frame
-        logging.info('action: shutdown_signal | result: received | signal: %s', signum)
+        logging.info('action: shutdown_signal | result: success | signal: %s', signum)
         server.graceful_shutdown()
         sys.exit(0)
 
