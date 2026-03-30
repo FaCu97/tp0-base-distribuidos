@@ -21,6 +21,7 @@ const (
 	birthFieldSize    = 10
 	numberFieldSize   = 4
 	betFrameSize      = nameFieldSize + surnameFieldSize + documentFieldSize + birthFieldSize + numberFieldSize
+	agencyFieldSize   = 1
 	batchCountSize    = 2
 	ackFrameSize      = 2
 	maxBatchBytes     = 8 * 1024
@@ -37,6 +38,7 @@ type Bet struct {
 // ClientConfig Configuration used by the client
 type ClientConfig struct {
 	ID             string
+	Agency         uint8
 	ServerAddress  string
 	LoopPeriod     time.Duration
 	Bets           []Bet
@@ -144,9 +146,7 @@ func (c *Client) StartClientLoop() {
 			return
 		}
 
-		for _, bet := range batch {
-			log.Infof("action: apuesta_enviada | result: success | dni: %s | numero: %d", bet.Documento, bet.Numero)
-		}
+		log.Infof("action: batch_enviado | result: success | cantidad apuestas: %d", len(batch))
 
 		if idx < len(batches)-1 && c.waitLoopPeriod() {
 			log.Infof("action: loop_finished | result: success | client_id: %v | reason: shutdown", c.config.ID)
@@ -211,7 +211,7 @@ func (c *Client) sendBatchFrame(conn net.Conn, batch []Bet) error {
 		return fmt.Errorf("batch size exceeds uint16 limit")
 	}
 
-	frame, err := buildBatchFrame(batch)
+	frame, err := buildBatchFrame(c.config.Agency, batch)
 	if err != nil {
 		return err
 	}
@@ -231,16 +231,17 @@ func (c *Client) sendBatchFrame(conn net.Conn, batch []Bet) error {
 	return nil
 }
 
-func buildBatchFrame(batch []Bet) ([]byte, error) {
+func buildBatchFrame(agency uint8, batch []Bet) ([]byte, error) {
 	payloadSize := len(batch) * betFrameSize
-	totalSize := batchCountSize + payloadSize
+	totalSize := agencyFieldSize + batchCountSize + payloadSize
 	if totalSize > maxBatchBytes {
 		return nil, fmt.Errorf("batch frame exceeds %d bytes", maxBatchBytes)
 	}
 
 	frame := make([]byte, totalSize)
-	binary.BigEndian.PutUint16(frame[:batchCountSize], uint16(len(batch)))
-	offset := batchCountSize
+	frame[0] = agency
+	binary.BigEndian.PutUint16(frame[agencyFieldSize:agencyFieldSize+batchCountSize], uint16(len(batch)))
+	offset := agencyFieldSize + batchCountSize
 
 	for _, bet := range batch {
 		betFrame, err := buildBetFrame(bet)
@@ -273,7 +274,7 @@ func splitBets(bets []Bet, batchSize int) [][]Bet {
 }
 
 func (c *Client) effectiveBatchSize() int {
-	maxByBytes := (maxBatchBytes - batchCountSize) / betFrameSize
+	maxByBytes := (maxBatchBytes - agencyFieldSize - batchCountSize) / betFrameSize
 	if maxByBytes <= 0 {
 		return 1
 	}

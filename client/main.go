@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -165,9 +166,15 @@ func main() {
 		})
 	}
 
+	agencyID, err := strconv.Atoi(v.GetString("id"))
+	if err != nil || agencyID < 0 || agencyID > 255 {
+		log.Criticalf("invalid agency id: %s", v.GetString("id"))
+	}
+
 	clientConfig := common.ClientConfig{
 		ServerAddress:  v.GetString("server.address"),
 		ID:             v.GetString("id"),
+		Agency:         uint8(agencyID),
 		LoopPeriod:     v.GetDuration("loop.period"),
 		Bets:           commonBets,
 		BatchMaxAmount: v.GetInt("batch.maxAmount"),

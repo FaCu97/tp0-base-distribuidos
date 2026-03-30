@@ -10,6 +10,7 @@ SURNAME_FIELD_SIZE = 30
 DOCUMENT_FIELD_SIZE = 8
 BIRTH_FIELD_SIZE = 10
 NUMBER_FIELD_SIZE = 4
+AGENCY_FIELD_SIZE = 1
 BET_COUNT_SIZE = 2
 BET_FRAME_SIZE = (
     NAME_FIELD_SIZE
@@ -67,11 +68,11 @@ class Server:
         """
         try:
             addr = client_sock.getpeername()
-            agency = self.__infer_agency_from_client_socket(addr)
+            _ = addr
 
             while True:
                 try:
-                    bet_count = self.__read_bet_count(client_sock)
+                    agency, bet_count = self.__read_batch_header(client_sock)
                 except EOFError:
                     break
 
@@ -162,16 +163,18 @@ class Server:
     def __send_ack(self, client_sock, ack):
         client_sock.sendall(ack)
 
-    def __read_bet_count(self, client_sock):
-        raw_count = self.__read_exact(client_sock, BET_COUNT_SIZE)
+    def __read_batch_header(self, client_sock):
+        raw_header = self.__read_exact(client_sock, AGENCY_FIELD_SIZE + BET_COUNT_SIZE)
+        agency = raw_header[0]
+        raw_count = raw_header[AGENCY_FIELD_SIZE:AGENCY_FIELD_SIZE + BET_COUNT_SIZE]
         bet_count = int.from_bytes(raw_count, byteorder='big', signed=False)
         if bet_count <= 0:
             raise ValueError('bet_count must be greater than zero')
-        return bet_count
+        return str(agency), bet_count
 
     def __read_batch_payload(self, client_sock, bet_count):
         payload_size = bet_count * BET_FRAME_SIZE
-        total_size = BET_COUNT_SIZE + payload_size
+        total_size = AGENCY_FIELD_SIZE + BET_COUNT_SIZE + payload_size
         if total_size > MAX_BATCH_BYTES:
             raise ValueError('batch payload exceeds 8kB limit')
 
@@ -229,6 +232,3 @@ class Server:
 
         return bets
 
-    def __infer_agency_from_client_socket(self, addr):
-        _ = addr
-        return '0'
