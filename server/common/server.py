@@ -67,27 +67,33 @@ class Server:
         """
         try:
             addr = client_sock.getpeername()
-            bet_count = self.__read_bet_count(client_sock)
-            payload = self.__read_batch_payload(client_sock, bet_count)
-            decoded_bets = self.__decode_batch(payload, bet_count)
-
             agency = self.__infer_agency_from_client_socket(addr)
-            to_store = []
-            for bet in decoded_bets:
-                to_store.append(
-                    Bet(
-                        agency,
-                        bet['nombre'],
-                        bet['apellido'],
-                        bet['documento'],
-                        bet['nacimiento'],
-                        str(bet['numero']),
-                    )
-                )
-            store_bets(to_store)
 
-            logging.info('action: apuesta_recibida | result: success | cantidad: %s', bet_count)
-            self.__send_ack(client_sock, ACK_OK)
+            while True:
+                try:
+                    bet_count = self.__read_bet_count(client_sock)
+                except EOFError:
+                    break
+
+                payload = self.__read_batch_payload(client_sock, bet_count)
+                decoded_bets = self.__decode_batch(payload, bet_count)
+
+                to_store = []
+                for bet in decoded_bets:
+                    to_store.append(
+                        Bet(
+                            agency,
+                            bet['nombre'],
+                            bet['apellido'],
+                            bet['documento'],
+                            bet['nacimiento'],
+                            str(bet['numero']),
+                        )
+                    )
+                store_bets(to_store)
+
+                logging.info('action: apuesta_recibida | result: success | cantidad: %s', bet_count)
+                self.__send_ack(client_sock, ACK_OK)
         except OSError as e:
             logging.error('action: receive_message | result: fail | error: %s', e)
             self.__safe_send_error_ack(client_sock)
@@ -146,6 +152,8 @@ class Server:
         while len(data) < size:
             chunk = client_sock.recv(size - len(data))
             if not chunk:
+                if len(data) == 0:
+                    raise EOFError('connection closed by peer')
                 raise OSError('connection closed before full frame reception')
             data.extend(chunk)
 

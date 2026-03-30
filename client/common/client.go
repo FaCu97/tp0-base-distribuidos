@@ -106,30 +106,29 @@ func (c *Client) StartClientLoop() {
 	batchSize := c.effectiveBatchSize()
 	batches := splitBets(c.config.Bets, batchSize)
 
+	if err := c.createClientSocket(); err != nil {
+		return
+	}
+	defer c.closeClientSocket()
+
+	conn := c.getConn()
+	if conn == nil {
+		log.Errorf("action: send_message | result: fail | client_id: %v | error: connection_closed", c.config.ID)
+		return
+	}
+
 	for idx, batch := range batches {
 		if c.isShuttingDown() {
 			log.Infof("action: loop_finished | result: success | client_id: %v | reason: shutdown", c.config.ID)
 			return
 		}
 
-		if err := c.createClientSocket(); err != nil {
-			return
-		}
-
-		conn := c.getConn()
-		if conn == nil {
-			log.Errorf("action: send_message | result: fail | client_id: %v | error: connection_closed", c.config.ID)
-			return
-		}
-
 		if err := c.sendBatchFrame(conn, batch); err != nil {
 			log.Errorf("action: send_message | result: fail | client_id: %v | error: %v", c.config.ID, err)
-			c.closeClientSocket()
 			return
 		}
 
 		ack, err := c.readAck(conn)
-		c.closeClientSocket()
 		if err != nil {
 			if c.isShuttingDown() {
 				log.Infof("action: receive_message | result: success | client_id: %v | reason: shutdown", c.config.ID)
