@@ -20,11 +20,17 @@ const (
 	documentFieldSize = 8
 	birthFieldSize    = 10
 	numberFieldSize   = 4
+	messageTypeSize   = 1
 	betFrameSize      = nameFieldSize + surnameFieldSize + documentFieldSize + birthFieldSize + numberFieldSize
 	agencyFieldSize   = 1
 	batchCountSize    = 2
+	winnerCountSize   = 2
 	ackFrameSize      = 2
 	maxBatchBytes     = 8 * 1024
+	drawWaitPeriod    = 200 * time.Millisecond
+	msgTypeBatch      = byte('B')
+	msgTypeNotifyDraw = byte('N')
+	msgTypeWinners    = byte('W')
 )
 
 type Bet struct {
@@ -154,6 +160,33 @@ func (c *Client) StartClientLoop() {
 		}
 	}
 
+	if err := c.sendAgencyMessage(conn, msgTypeNotifyDraw); err != nil {
+		log.Errorf("action: send_message | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
+	}
+
+	ack, err := c.readAck(conn)
+	if err != nil {
+		log.Errorf("action: receive_message | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
+	}
+
+	if ack != "OK" {
+		log.Errorf("action: receive_message | result: fail | client_id: %v | error: invalid_ack", c.config.ID)
+		return
+	}
+
+	//debug
+	log.Infof("action: pidiendo_ganadores | result: in_progress")
+
+	winners, err := c.requestWinners(conn)
+	if err != nil {
+		log.Errorf("action: consulta_ganadores | result: fail | client_id: %v | error: %v", c.config.ID, err)
+		return
+	}
+
+	log.Infof("action: consulta_ganadores | result: success | cant_ganadores: %d", len(winners))
+
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
 
@@ -216,32 +249,21 @@ func (c *Client) sendBatchFrame(conn net.Conn, batch []Bet) error {
 		return err
 	}
 
-	totalWritten := 0
-	for totalWritten < len(frame) {
-		n, writeErr := conn.Write(frame[totalWritten:])
-		if writeErr != nil {
-			return writeErr
-		}
-		if n == 0 {
-			return fmt.Errorf("short write detected")
-		}
-		totalWritten += n
-	}
-
-	return nil
+	return c.writeFull(conn, frame)
 }
 
 func buildBatchFrame(agency uint8, batch []Bet) ([]byte, error) {
 	payloadSize := len(batch) * betFrameSize
-	totalSize := agencyFieldSize + batchCountSize + payloadSize
+	totalSize := messageTypeSize + agencyFieldSize + batchCountSize + payloadSize
 	if totalSize > maxBatchBytes {
 		return nil, fmt.Errorf("batch frame exceeds %d bytes", maxBatchBytes)
 	}
 
 	frame := make([]byte, totalSize)
-	frame[0] = agency
-	binary.BigEndian.PutUint16(frame[agencyFieldSize:agencyFieldSize+batchCountSize], uint16(len(batch)))
-	offset := agencyFieldSize + batchCountSize
+	frame[0] = msgTypeBatch
+	frame[1] = agency
+	binary.BigEndian.PutUint16(frame[messageTypeSize+agencyFieldSize:messageTypeSize+agencyFieldSize+batchCountSize], uint16(len(batch)))
+	offset := messageTypeSize + agencyFieldSize + batchCountSize
 
 	for _, bet := range batch {
 		betFrame, err := buildBetFrame(bet)
@@ -254,6 +276,27 @@ func buildBatchFrame(agency uint8, batch []Bet) ([]byte, error) {
 	}
 
 	return frame, nil
+}
+
+func (c *Client) sendAgencyMessage(conn net.Conn, messageType byte) error {
+	frame := []byte{messageType, c.config.Agency}
+	return c.writeFull(conn, frame)
+}
+
+func (c *Client) writeFull(conn net.Conn, payload []byte) error {
+	totalWritten := 0
+	for totalWritten < len(payload) {
+		n, writeErr := conn.Write(payload[totalWritten:])
+		if writeErr != nil {
+			return writeErr
+		}
+		if n == 0 {
+			return fmt.Errorf("short write detected")
+		}
+		totalWritten += n
+	}
+
+	return nil
 }
 
 func splitBets(bets []Bet, batchSize int) [][]Bet {
@@ -274,7 +317,7 @@ func splitBets(bets []Bet, batchSize int) [][]Bet {
 }
 
 func (c *Client) effectiveBatchSize() int {
-	maxByBytes := (maxBatchBytes - agencyFieldSize - batchCountSize) / betFrameSize
+	maxByBytes := (maxBatchBytes - messageTypeSize - agencyFieldSize - batchCountSize) / betFrameSize
 	if maxByBytes <= 0 {
 		return 1
 	}
@@ -298,6 +341,59 @@ func (c *Client) readAck(conn net.Conn) (string, error) {
 	}
 
 	return string(ack), nil
+}
+
+func (c *Client) requestWinners(conn net.Conn) ([]string, error) {
+	for {
+		if err := c.sendAgencyMessage(conn, msgTypeWinners); err != nil {
+			return nil, err
+		}
+
+		status, err := c.readAck(conn)
+		if err != nil {
+			return nil, err
+		}
+
+		if status == "WT" {
+			if c.isShuttingDown() {
+				return nil, fmt.Errorf("shutdown")
+			}
+			time.Sleep(drawWaitPeriod)
+			continue
+		}
+
+		if status != "OK" {
+			return nil, fmt.Errorf("invalid status while requesting winners")
+		}
+
+		return c.readWinners(conn)
+	}
+}
+
+func (c *Client) readWinners(conn net.Conn) ([]string, error) {
+	rawCount := make([]byte, winnerCountSize)
+	if _, err := io.ReadFull(conn, rawCount); err != nil {
+		return nil, err
+	}
+
+	winnerCount := int(binary.BigEndian.Uint16(rawCount))
+	if winnerCount == 0 {
+		return []string{}, nil
+	}
+
+	payload := make([]byte, winnerCount*documentFieldSize)
+	if _, err := io.ReadFull(conn, payload); err != nil {
+		return nil, err
+	}
+
+	winners := make([]string, 0, winnerCount)
+	for idx := 0; idx < winnerCount; idx++ {
+		offset := idx * documentFieldSize
+		documentRaw := payload[offset : offset+documentFieldSize]
+		winners = append(winners, strings.TrimSpace(string(documentRaw)))
+	}
+
+	return winners, nil
 }
 
 func buildBetFrame(bet Bet) ([]byte, error) {
