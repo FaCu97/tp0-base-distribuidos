@@ -213,3 +213,22 @@ Protocolo de batch:
 El servidor procesa el batch completo y responde un solo ACK:
 - OK si todas las apuestas se pudieron procesar.
 - ER si falla al menos una.
+
+### Ejercicio 7
+Se agregaron nuevos tipos de mensaje para coordinar el cierre de carga y la consulta de ganadores por agencia.
+
+Protocolo (tipo + payload):
+- B (batch): 1 byte tipo + 1 byte agencia + 2 bytes cantidad + N apuestas de 82 bytes.
+- N (notificacion de fin): 1 byte tipo + 1 byte agencia.
+- W (consulta de ganadores): 1 byte tipo + 1 byte agencia.
+
+Flujo:
+- Cada cliente envia todos sus batchs y luego envia N para confirmar que termino su carga.
+- El servidor espera la confirmacion de todas las agencias configuradas (SERVER_TOTAL_AGENCIES).
+- Una vez completas las confirmaciones, ejecuta el sorteo y habilita respuestas de ganadores.
+- Cada cliente consulta con W y recibe solo los DNIs ganadores de su propia agencia.
+
+Respuesta a W:
+- ACK `OK` (2 bytes)
+- cantidad de ganadores (uint16 big-endian)
+- lista de DNIs en campos fijos de 8 bytes
