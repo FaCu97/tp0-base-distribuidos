@@ -31,7 +31,7 @@ ACK_ERR = b"ER"
 
 
 class Server:
-    def __init__(self, port, listen_backlog, total_agencies):
+    def __init__(self, port, listen_backlog):
         # Initialize server socket
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(('', port))
@@ -45,7 +45,7 @@ class Server:
         self._confirmed_agencies = set()
         self._draw_done = False
         self._winners_by_agency = {}
-        self._total_agencies = total_agencies
+        self._total_agencies = listen_backlog
 
     def run(self):
         """

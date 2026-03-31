@@ -35,7 +35,6 @@ def initialize_config():
     try:
         config_params["port"] = int(os.getenv('SERVER_PORT', config["DEFAULT"]["SERVER_PORT"]))
         config_params["listen_backlog"] = int(os.getenv('SERVER_LISTEN_BACKLOG', config["DEFAULT"]["SERVER_LISTEN_BACKLOG"]))
-        config_params["total_agencies"] = int(os.getenv('SERVER_TOTAL_AGENCIES', config["DEFAULT"]["SERVER_TOTAL_AGENCIES"]))
         config_params["logging_level"] = os.getenv('LOGGING_LEVEL', config["DEFAULT"]["LOGGING_LEVEL"])
     except KeyError as e:
         raise KeyError("Key was not found. Error: {} .Aborting server".format(e))
@@ -50,7 +49,7 @@ def main():
     logging_level = config_params["logging_level"]
     port = config_params["port"]
     listen_backlog = config_params["listen_backlog"]
-    total_agencies = config_params["total_agencies"]
+    total_agencies = config_params["listen_backlog"]
 
     if total_agencies <= 0:
         raise ValueError("SERVER_TOTAL_AGENCIES must be greater than zero")
