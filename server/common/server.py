@@ -31,7 +31,7 @@ ACK_ERR = b"ER"
 
 
 class Server:
-    def __init__(self, port, listen_backlog):
+    def __init__(self, port, listen_backlog, total_agencies):
         # Initialize server socket
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.bind(('', port))
@@ -45,7 +45,7 @@ class Server:
         self._confirmed_agencies = set()
         self._draw_done = False
         self._winners_by_agency = {}
-        self._total_agencies = listen_backlog
+        self._total_agencies = total_agencies
 
     def run(self):
         """
@@ -261,8 +261,6 @@ class Server:
                 should_run_draw = True
 
         if should_run_draw:
-            logging.info('action: running_draw')
-
             self.__run_draw()
 
     def __run_draw(self):
@@ -270,9 +268,6 @@ class Server:
         try:
             for bet in load_bets():
                 if has_won(bet):
-                    #debug
-                    logging.info('action: ganador_encontrado')
-
                     winners_by_agency.setdefault(str(bet.agency), []).append(bet.document)
         except FileNotFoundError:
             winners_by_agency = {}
